@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: stg_taxi_zones
+    description: >
+      One clean row per TLC taxi zone (grain: 1 row per zone, PK location_id).
+      Thin 1:1 read of the taxi_zone_lookup seed.
+    columns:
+      - name: location_id
+        description: Primary key. TLC zone id (1-265).
+        data_tests:
+          - not_null
+          - unique
+
+  - name: stg_yellow_trips
+    description: >
+      One clean row per raw Yellow Taxi trip (grain: 1 row per trip, PK trip_id).
+      Snake-cased + explicitly cast; exact TLC duplicates deduped on trip_id.
+    columns:
+      - name: trip_id
+        description: >
+          Surrogate key over the natural identity of a trip
+          (vendor, pickup/dropoff datetime, pickup/dropoff location, total_amount).
+        data_tests:
+          - not_null
+          - unique

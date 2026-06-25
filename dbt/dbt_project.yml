@@ -1,0 +1,22 @@
+name: 'nyc_taxi'
+version: '1.0.0'
+config-version: 2
+profile: 'nyc_taxi'
+
+model-paths: ["models"]
+seed-paths:  ["seeds"]
+test-paths:  ["tests"]
+macro-paths: ["macros"]
+
+models:
+  nyc_taxi:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+
+vars:
+  min_trip_duration_minutes: 1
+  max_trip_duration_minutes: 180

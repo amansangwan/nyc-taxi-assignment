@@ -1,0 +1,15 @@
+# Copy this to ~/.dbt/profiles.yml (or keep alongside the project and pass
+# --profiles-dir .). Export the SNOWFLAKE_* env vars before using it.
+nyc_taxi:
+  target: snowflake
+  outputs:
+    snowflake:
+      type: snowflake
+      account:   "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:      "{{ env_var('SNOWFLAKE_USER') }}"
+      password:  "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role:      "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'NYC_TAXI') }}"
+      schema:    "{{ env_var('SNOWFLAKE_SCHEMA', 'DBT') }}"
+      threads: 8

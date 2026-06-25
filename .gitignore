@@ -1,0 +1,17 @@
+**/profiles.yml
+.env
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+data/
+*.parquet
+.venv/
+__pycache__/
+*.pyc
+
+# dbt: machine-specific anonymous-usage UUID (do NOT commit).
+# Note: dbt/package-lock.yml IS committed on purpose (it pins package versions).
+dbt/.user.yml
+
+# macOS
+.DS_Store

@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: int_trips_enriched
+    description: >
+      One row per VALID trip (grain: 1 row per trip, PK trip_id), enriched with
+      pickup/dropoff zone + borough and filtered to plausible trips. Ephemeral:
+      tested via the inlined query, never materialised.
+    columns:
+      - name: trip_id
+        description: Primary key, carried from stg_yellow_trips.
+        data_tests:
+          - not_null
+          - unique

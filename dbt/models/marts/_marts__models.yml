@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: dim_zones
+    description: >
+      Zone dimension of the star schema (grain: 1 row per zone, PK location_id).
+      Built from the lookup, not from facts.
+    columns:
+      - name: location_id
+        description: Primary key. Referenced by fct_trips pickup/dropoff FKs.
+        data_tests:
+          - not_null
+          - unique
+
+  - name: fct_trips
+    description: >
+      Central fact (grain: 1 row per valid trip, PK trip_id). One row per trip
+      with FKs into dim_zones and the trip's measures.
+    columns:
+      - name: trip_id
+        description: Primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: trip_duration_minutes
+        description: >
+          Trip length in fractional minutes. Bounded by the validity filter in
+          int_trips_enriched; this custom generic test re-asserts the same bounds
+          on the published fact, fed by the project duration vars.
+        data_tests:
+          - value_in_range:
+              arguments:
+                min_value: "{{ var('min_trip_duration_minutes') }}"
+                max_value: "{{ var('max_trip_duration_minutes') }}"
+      - name: pickup_location_id
+        description: FK -> dim_zones.location_id (pickup).
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zones')
+                field: location_id
+      - name: dropoff_location_id
+        description: FK -> dim_zones.location_id (dropoff).
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zones')
+                field: location_id
+      - name: payment_type
+        description: TLC payment type code (1-6).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5, 6]
+                quote: false
+
+  - name: agg_daily_revenue
+    description: >
+      Daily revenue summary (grain: 1 row per day, PK trip_date).
+    columns:
+      - name: trip_date
+        description: Primary key. Calendar day of pickup.
+        data_tests:
+          - not_null
+          - unique
+
+  - name: agg_zone_performance
+    description: >
+      Pickup-zone performance per month
+      (grain: 1 row per (pickup_location_id, trip_month), composite PK).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - pickup_location_id
+              - trip_month
+    columns:
+      - name: pickup_location_id
+        description: Part of the composite PK. Zone of pickup.
+        data_tests:
+          - not_null
+      - name: trip_month
+        description: Part of the composite PK. Month bucket (first of month).
+        data_tests:
+          - not_null
