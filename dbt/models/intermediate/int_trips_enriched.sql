@@ -35,8 +35,6 @@ enriched as (
         trips.total_amount,
         trips.trip_duration_minutes,
 
-        -- LOCKED: LEFT JOIN + coalesce so a trip whose LocationID is missing from
-        -- the lookup is KEPT (labelled 'Unknown'), never silently dropped.
         coalesce(pickup_zones.zone, 'Unknown')      as pickup_zone,
         coalesce(pickup_zones.borough, 'Unknown')   as pickup_borough,
         coalesce(dropoff_zones.zone, 'Unknown')     as dropoff_zone,
@@ -51,9 +49,6 @@ enriched as (
 )
 
 select * from enriched
-
--- LOCKED: validity filter. Keep only economically/physically plausible trips;
--- bounds for duration come from project vars so they are tunable in one place.
 where trip_distance > 0
   and fare_amount > 0
   and passenger_count > 0

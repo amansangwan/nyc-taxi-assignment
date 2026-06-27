@@ -32,20 +32,7 @@ from pyspark.sql import functions as F
 # Spark session
 # ---------------------------------------------------------------------------
 def build_spark() -> SparkSession:
-    """Create the SparkSession.
 
-    On a real cluster, executor/driver memory, core counts and shuffle
-    partitions are supplied by spark-submit / the Glue or EMR job config -- not
-    hardcoded here. We only pin behaviour that must be deterministic for
-    correctness:
-      * session timezone = UTC, so to_date()/unix_timestamp() bucket trips by
-        the same wall-clock day everywhere (TLC timestamps are wall-clock NYC,
-        but consistency across runs/regions is what matters for reproducibility).
-      * Adaptive Query Execution (AQE) ON: lets Spark coalesce shuffle
-        partitions at runtime, which right-sizes the groupBy shuffle for very
-        different per-year data volumes (2009 is far smaller than 2019) without
-        us guessing spark.sql.shuffle.partitions up front.
-    """
     return (
         SparkSession.builder.appName("nyc_taxi_process_historical")
         .config("spark.sql.session.timeZone", "UTC")
@@ -55,46 +42,14 @@ def build_spark() -> SparkSession:
     )
 
 
-# ---------------------------------------------------------------------------
-# Stage 1 -- READ
-# ---------------------------------------------------------------------------
 def read_raw(spark: SparkSession, input_path: str) -> DataFrame:
-    """Read all yellow_tripdata_*.parquet files under input_path.
 
-    WHY Parquet parallelizes well: it is columnar AND splittable. Columnar
-    means we only touch the ~10 columns this job needs, not the full ~19 -- the
-    reader prunes the rest at the storage layer (projection pushdown). Splittable
-    means each file (and row-group within it) is an independent read task, so a
-    directory of monthly files fans out across all executor cores with no
-    coordination. ~180 monthly files (15 years x 12) => natural parallelism.
-    """
-    # Glob the monthly files. spark.read.parquet accepts a glob and lists files
-    # in parallel; one read task per file/row-group.
     pattern = os.path.join(input_path, "yellow_tripdata_*.parquet")
     return spark.read.parquet(pattern)
 
 
-# ---------------------------------------------------------------------------
-# Stage 2 -- CLEAN  (stg_yellow_trips + int_trips_enriched validity filter)
-# ---------------------------------------------------------------------------
 def clean(df: DataFrame) -> DataFrame:
-    """Snake-case + explicitly cast the columns we keep, derive duration, then
-    apply the same validity filter as int_trips_enriched.
 
-    SCHEMA DRIFT (2009-2023) -- IMPORTANT:
-      TLC's column names and set changed across eras. The MODERN schema (~2015+)
-      uses VendorID / tpep_pickup_datetime / tpep_dropoff_datetime / PULocationID
-      / DOLocationID, and `airport_fee` only appears in later years. Pre-2015
-      files instead use names like vendor_id / Trip_Pickup_DateTime /
-      Start_Lon|Start_Lat (lat/long, no LocationID at all).
-
-      This function handles the MODERN schema. A real all-years run needs a thin
-      per-era normalization layer in front of clean() -- e.g. detect the era from
-      the column set and rename/derive into one canonical schema (and, for the
-      pre-LocationID years, map lat/long to zones via a spatial join) before this
-      step. That normalization is intentionally out of scope here; flagged so the
-      reader knows it is a known, deliberate boundary, not an oversight.
-    """
     cleaned = df.select(
         F.col("VendorID").cast("int").alias("vendor_id"),
         F.col("tpep_pickup_datetime").cast("timestamp").alias("pickup_datetime"),
@@ -108,9 +63,6 @@ def clean(df: DataFrame) -> DataFrame:
         F.col("tip_amount").cast("decimal(10, 2)").alias("tip_amount"),
         F.col("total_amount").cast("decimal(10, 2)").alias("total_amount"),
     ).withColumn(
-        # Fractional minutes, matching dbt's datediff('second', ...)/60.0.
-        # unix_timestamp() -> epoch seconds; subtract and divide by 60.0 (the
-        # .0 forces double division, no integer truncation).
         "trip_duration_minutes",
         (
             F.unix_timestamp("dropoff_datetime")
@@ -119,8 +71,6 @@ def clean(df: DataFrame) -> DataFrame:
         / 60.0,
     )
 
-    # Validity filter -- identical rules to int_trips_enriched. Note `> 0` on
-    # passenger_count also discards NULLs (NULL > 0 is not true), same as dbt.
     return cleaned.where(
         (F.col("trip_distance") > 0)
         & (F.col("fare_amount") > 0)
@@ -129,17 +79,7 @@ def clean(df: DataFrame) -> DataFrame:
     )
 
 
-# ---------------------------------------------------------------------------
-# Stage 3 -- AGGREGATE  (agg_daily_revenue equivalent)
-# ---------------------------------------------------------------------------
 def aggregate_daily(df: DataFrame) -> DataFrame:
-    """Roll cleaned trips up to one row per calendar day.
-
-    tip_rate_pct uses the SAME locked decision as dbt: tips as a percent of
-    FARE (not total), guarded against divide-by-zero. Spark returns NULL for
-    x / 0 with decimals... to be explicit and portable we guard with a CASE so a
-    zero-fare day yields NULL rather than relying on engine-specific behaviour.
-    """
     daily = df.groupBy(
         F.to_date("pickup_datetime").alias("trip_date")
     ).agg(
@@ -149,30 +89,18 @@ def aggregate_daily(df: DataFrame) -> DataFrame:
         F.sum("tip_amount").alias("total_tips"),
     )
 
-    return daily.withColumn(
+    final_daily = daily.withColumn(
         "tip_rate_pct",
         F.when(
             F.col("total_fare") != 0,
             100.0 * F.col("total_tips") / F.col("total_fare"),
-        ).otherwise(F.lit(None)),
+            ).otherwise(F.lit(None)),
     )
+    return final_daily
 
 
-# ---------------------------------------------------------------------------
-# Stage 4 -- WRITE  (partitioned Parquet)
-# ---------------------------------------------------------------------------
 def write_partitioned(df: DataFrame, output_path: str) -> None:
-    """Add year/month from the trip date and write partitioned Parquet.
 
-    REPARTITION BEFORE WRITE -- deliberate USE:
-      Without it, every shuffle partition from the upstream aggregation could
-      contain rows for many (year, month) pairs, so partitionBy would emit one
-      small file PER shuffle-partition PER (year, month) -- the classic
-      small-files problem (thousands of tiny files murder S3 listing + later
-      read planning). repartition("year","month") hash-distributes so all rows
-      for a given (year, month) land on ONE task, yielding ~one file per
-      partition directory. We pay one extra shuffle to buy a clean file layout.
-    """
     out = df.withColumn("year", F.year("trip_date")).withColumn(
         "month", F.month("trip_date")
     )
@@ -237,7 +165,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="PySpark: clean + daily-aggregate NYC TLC Yellow Taxi data."
     )
-    # Nothing hardcoded: paths come from CLI flags, falling back to env vars.
     parser.add_argument(
         "--input",
         default=os.environ.get("NYC_TAXI_INPUT_PATH"),

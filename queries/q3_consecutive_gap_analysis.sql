@@ -5,13 +5,6 @@
    dropoff and the NEXT trip's pickup that originates from the SAME pickup zone,
    and which zone that maximal gap occurred in.
 
-   Source: NYC_TAXI.DBT.FCT_TRIPS.
-
-   Method: order trips within each (pickup zone, day) partition by pickup time,
-   use LAG to pull the previous trip's dropoff, and measure the idle gap until
-   the current pickup. The first trip in each partition has a NULL lag and is
-   dropped. Per day we keep the single largest gap and carry its zone.
-
    ----------------------------------------------------------------------------
    BRAINSTORMER -- making this performant on Snowflake at ~38M rows:
 
@@ -41,8 +34,6 @@
        Physical CLUSTERING (3 above), not SOS, is the right optimization for
        partitioned window/range workloads.
    ----------------------------------------------------------------------------
-
-   Dialect: Snowflake. Run in a Snowsight worksheet.
    ============================================================================ */
 
 with gaps as (
@@ -53,11 +44,10 @@ with gaps as (
         pickup_zone,
         pickup_datetime,
 
-        -- previous trip's dropoff within the SAME (zone, day), by pickup time
         lag(dropoff_datetime) over (
             partition by pickup_location_id, cast(pickup_datetime as date)
             order by pickup_datetime
-        )                                           as prev_dropoff
+        )                                           as prev_dropoff_datetime
 
     from NYC_TAXI.DBT.FCT_TRIPS
 
@@ -70,14 +60,12 @@ trip_gaps as (
         pickup_location_id,
         pickup_zone,
         -- idle minutes between the previous dropoff and this pickup
-        datediff('second', prev_dropoff, pickup_datetime) / 60.0
+        datediff('second', prev_dropoff_datetime, pickup_datetime) / 60.0
                                                     as gap_minutes
     from gaps
-    where prev_dropoff is not null                  -- drop the first trip / partition
+    where prev_dropoff_datetime is not null
 
 )
-
--- one row per day: the largest same-zone gap and the zone it happened in
 select
     trip_date,
     pickup_location_id                              as max_gap_pickup_location_id,

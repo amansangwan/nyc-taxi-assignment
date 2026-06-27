@@ -1,9 +1,5 @@
 version: 2
 
-# Source definitions for the staging layer.
-# dbt only reads from these objects; the raw data is ingested into Snowflake
-# upstream (stage + COPY INTO) and lives in NYC_TAXI.RAW.
-
 sources:
   - name: nyc_tlc
     description: >
@@ -18,15 +14,8 @@ sources:
           Yellow Taxi trip records for the full 2023 year (~38M rows),
           one row per trip as delivered by TLC (includes exact-duplicate rows
           that staging later dedups on the surrogate key).
-        # dbt 1.11+: freshness config lives under `config:` (the old
-        # top-level form is deprecated).
         config:
           loaded_at_field: tpep_pickup_datetime
           freshness:
             warn_after: { count: 24, period: hour }
             error_after: { count: 48, period: hour }
-        # NOTE: 2023 is a static historical dataset, so the newest
-        # tpep_pickup_datetime is fixed in the past. `dbt source freshness`
-        # will therefore always report STALE/ERROR here — this is expected and
-        # documented, not a pipeline bug. The block is kept to demonstrate the
-        # production pattern for a live, continuously-loaded source.
